@@ -11,6 +11,16 @@ import './App.css'
 
 type TabId = 'seed' | 'flow' | 'optim' | 'export'
 
+const SIDEBAR_COLLAPSE_KEY = 'hydrooptfoil.sidebarCollapsed'
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SIDEBAR_COLLAPSE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export default function App() {
   const [meta, setMeta] = useState<{
     presets: Record<string, Record<string, unknown>>
@@ -24,8 +34,17 @@ export default function App() {
   const [convergence, setConvergence] = useState<number[]>([])
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [optErr, setOptErr] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed)
   const esCloseRef = useRef<(() => void) | null>(null)
   const optimizeDoneRef = useRef(false)
+
+  useEffect(() => {
+    try {
+      globalThis.localStorage?.setItem(SIDEBAR_COLLAPSE_KEY, sidebarCollapsed ? '1' : '0')
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [sidebarCollapsed])
 
   useEffect(() => {
     api
@@ -119,16 +138,28 @@ export default function App() {
         <span className="version">web</span>
       </header>
       {metaErr && <p className="error banner">{metaErr}</p>}
-      <div className="app-body">
-        <Sidebar
-          presets={presets}
-          mastAirfoils={mastList.length ? mastList : ['NACA 0012', 'NACA 0010']}
-          wingAirfoils={wingList.length ? wingList : ['NACA 4412', 'NACA 2412']}
-          s={form}
-          set={setHydro}
-          onRunOptimization={() => void runOptimization()}
-          onResetResults={resetResults}
-        />
+      <div className={`app-body${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+        <div className={`sidebar-shell${sidebarCollapsed ? ' is-collapsed' : ''}`}>
+          <Sidebar
+            presets={presets}
+            mastAirfoils={mastList.length ? mastList : ['NACA 0012', 'NACA 0010']}
+            wingAirfoils={wingList.length ? wingList : ['NACA 4412', 'NACA 2412']}
+            s={form}
+            set={setHydro}
+            onRunOptimization={() => void runOptimization()}
+            onResetResults={resetResults}
+          />
+          <button
+            type="button"
+            className="sidebar-rail-toggle"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            aria-expanded={!sidebarCollapsed}
+            aria-label={sidebarCollapsed ? 'Show configuration sidebar' : 'Hide configuration sidebar'}
+            title={sidebarCollapsed ? 'Show configuration' : 'Hide configuration'}
+          >
+            {sidebarCollapsed ? '⟩' : '⟨'}
+          </button>
+        </div>
         <main className="main">
           <nav className="tabs">
             {(

@@ -14,7 +14,11 @@ export function buildExportStem(s: HydroFormState): string {
   const short =
     s.seedSource === 'library'
       ? s.seedLibraryName.replace(/NACA /g, 'N').replace(/-/g, '').replace(/ /g, '')
-      : 'custom'
+      : (s.foilSectionOptions.find((o) => o.id === s.seedSectionId)?.name ?? 'section')
+          .replace(/NACA /g, 'N')
+          .replace(/-/g, '')
+          .replace(/ /g, '')
+          .replace(/[^\w.-]+/g, '_') || 'custom'
   parts.push(short)
 
   if (s.componentType === 'mast') {

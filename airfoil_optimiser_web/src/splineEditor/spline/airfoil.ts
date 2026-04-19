@@ -176,6 +176,29 @@ export function buildNaca0012(opts: BuildOptions = {}): Airfoil {
 }
 
 /**
+ * Symmetric NACA four-digit **00TT** (e.g. `0012` → 12% t/c).
+ * Same B-spline fit as {@link buildNaca0012} with `thickness = TT/100`.
+ * Cambered codes (2412, 4412, …) are not supported in this path.
+ */
+export function buildSymmetricNaca00(fourDigitCode: string, opts: BuildOptions = {}): Airfoil {
+  const raw = fourDigitCode.replace(/^naca\s*/i, "").replace(/\s/g, "").replace(/\D/g, "");
+  const d = raw.length >= 4 ? raw.slice(-4) : raw.padStart(4, "0");
+  if (!/^\d{4}$/.test(d)) {
+    throw new Error("Enter four digits, e.g. 0012.");
+  }
+  if (!d.startsWith("00")) {
+    throw new Error("Only symmetric NACA 00TT is supported here (e.g. 0010, 0012).");
+  }
+  const tt = parseInt(d.slice(2), 10);
+  if (tt < 4 || tt > 30) {
+    throw new Error("Thickness code TT should be between 04 and 30 (percent of chord).");
+  }
+  const thickness = tt / 100;
+  const name = opts.name ?? `NACA ${d}`;
+  return buildNaca0012({ ...opts, thickness, name });
+}
+
+/**
  * Point on a polyline with increasing x(σ) (LE → TE) at a target chordwise x in [0,1].
  * Matches how `fitNacaSurface` builds (x, y) targets before the B-spline LSQ.
  */

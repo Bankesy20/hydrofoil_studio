@@ -1,4 +1,3 @@
-import { parseDat } from '../api'
 import type { HydroFormState, LeLockMode, OperatingPoint } from '../hydroState'
 import { applyPreset } from '../hydroState'
 
@@ -80,12 +79,25 @@ export function Sidebar({
           <span>Source</span>
           <select
             value={s.seedSource}
-            onChange={(e) =>
-              set((p) => ({ ...p, seedSource: e.target.value as 'library' | 'upload' }))
-            }
+            onChange={(e) => {
+              const v = e.target.value as 'library' | 'section'
+              set((p) => {
+                if (v === 'section') {
+                  const first = p.foilSectionOptions[0]?.id ?? null
+                  return {
+                    ...p,
+                    seedSource: 'section',
+                    seedSectionId: p.seedSectionId && p.foilSectionOptions.some((o) => o.id === p.seedSectionId)
+                      ? p.seedSectionId
+                      : first,
+                  }
+                }
+                return { ...p, seedSource: 'library' }
+              })
+            }}
           >
             <option value="library">Library</option>
-            <option value="upload">Upload .dat</option>
+            <option value="section">Foil section (Seed tab)</option>
           </select>
         </label>
         {s.seedSource === 'library' ? (
@@ -103,20 +115,35 @@ export function Sidebar({
             </select>
           </label>
         ) : (
-          <label className="field">
-            <span>.dat file</span>
-            <input
-              type="file"
-              accept=".dat,.txt"
-              onChange={async (e) => {
-                const f = e.target.files?.[0]
-                if (!f) return
-                const text = await f.text()
-                const r = await parseDat(text)
-                set((p) => ({ ...p, seedUploadCoords: r.coordinates }))
-              }}
-            />
-          </label>
+          <>
+            <label className="field">
+              <span>Section</span>
+              <select
+                value={s.seedSectionId ?? ''}
+                disabled={!s.foilSectionOptions.length}
+                onChange={(e) =>
+                  set((p) => ({
+                    ...p,
+                    seedSectionId: e.target.value || null,
+                  }))
+                }
+              >
+                {!s.foilSectionOptions.length ? (
+                  <option value="">— open Seed tab first —</option>
+                ) : (
+                  s.foilSectionOptions.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            <p className="hint sidebar-seed-section-hint">
+              Uses the same sampling as the foil workshop (points per surface & spacing). Import or edit sections on
+              the <strong>Seed airfoil</strong> tab.
+            </p>
+          </>
         )}
       </details>
 

@@ -59,7 +59,10 @@ def run_optimize_thread(
     serialize: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> None:
     cfg = dict(config)
-    cfg["_cancel_cb"] = job.cancel_event.is_set
+    # Do not attach threading objects or bound methods to cfg: SciPy's
+    # differential_evolution uses multiprocessing when workers>1 and must
+    # pickle (func, args). A threading.Event / is_set handle breaks pickling
+    # and surfaces as a misleading "map-like callable" RuntimeError.
 
     def _cb(iteration: int, best_value: float, total_iterations: int) -> None:
         job.append_event(

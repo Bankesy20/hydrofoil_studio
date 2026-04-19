@@ -4,6 +4,7 @@ HydroOptFoil FastAPI backend — wraps ``airfoil_optimiser/hydrooptfoil``.
 
 from __future__ import annotations
 
+import inspect
 import numpy as np
 import asyncio
 import json
@@ -442,11 +443,12 @@ def export_files(body: ExportRequest) -> dict[str, Any]:
     export_coords = repanel_cosine(
         coords, n_points=body.export_npts, le_bunch=body.le_bunch
     )
-    dat = dat_string_from_coords(
-        export_coords,
-        body.export_name,
-        comment_lines=body.dat_header_comments,
-    )
+    dat_kw: dict[str, Any] = {}
+    if body.dat_header_comments is not None and "comment_lines" in inspect.signature(
+        dat_string_from_coords
+    ).parameters:
+        dat_kw["comment_lines"] = body.dat_header_comments
+    dat = dat_string_from_coords(export_coords, body.export_name, **dat_kw)
 
     polar_csv = None
     if body.polar and body.alphas:

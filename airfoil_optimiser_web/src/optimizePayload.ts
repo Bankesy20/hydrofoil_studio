@@ -7,7 +7,12 @@ import { waterKinematicViscosity } from './fluid'
 import * as api from './api'
 
 function seedPayload(s: HydroFormState) {
-  if (s.seedSource === 'upload' && s.seedUploadCoords?.length) {
+  if (s.seedSource === 'section') {
+    if (!s.seedUploadCoords?.length) {
+      throw new Error(
+        'Seed is set to a foil section but coordinates are not loaded yet. Open the Seed airfoil tab once, or pick another section.',
+      )
+    }
     return { kind: 'coordinates', coordinates: s.seedUploadCoords }
   }
   return { kind: 'library', library_name: s.seedLibraryName }

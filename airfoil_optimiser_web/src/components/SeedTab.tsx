@@ -160,7 +160,12 @@ export function SeedTab({ form, setHydro }: Props) {
 
   return (
     <div className="tab-seed">
-      <FoilWorkshop ref={workshopRef} setHydro={setHydro} />
+      <FoilWorkshop
+        ref={workshopRef}
+        setHydro={setHydro}
+        seedSource={form.seedSource}
+        seedSectionId={form.seedSectionId}
+      />
       {err && <p className="error">{err}</p>}
 
       <h3>NeuralFoil polars (multi-foil)</h3>
@@ -189,7 +194,7 @@ export function SeedTab({ form, setHydro }: Props) {
           </select>
         </label>
       </div>
-      <div className="row2">
+      <div className="row3">
         <label>
           α start
           <input

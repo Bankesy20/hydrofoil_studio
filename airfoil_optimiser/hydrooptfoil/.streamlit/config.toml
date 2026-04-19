@@ -1,0 +1,12 @@
+[theme]
+base = "dark"
+primaryColor = "#ff4081"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161b22"
+textColor = "#c9d1d9"
+font = "monospace"
+
+[client]
+# Reduce Streamlit's top-right toolbar (run/stop/deploy UI).
+# Options: "full" (default), "minimal", "viewer"
+toolbarMode = "minimal"

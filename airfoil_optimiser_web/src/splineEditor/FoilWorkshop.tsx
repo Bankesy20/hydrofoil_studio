@@ -11,10 +11,10 @@ import * as api from '../api'
 import type { HydroFormState } from '../hydroState'
 import { AirfoilEditor } from './AirfoilEditor'
 import { exportSeligCoords, formatSelig } from './export/selig'
-import { useDebouncedValue } from './hooks/useDebouncedValue'
 import {
   buildAirfoilFromSeligPoints,
   buildNaca0012,
+  buildSymmetricNaca00,
   maxDeviationFromNaca,
   sampleAirfoil,
   withFixedPoints,
@@ -42,6 +42,17 @@ const PEER_STROKE = [
   { u: '#e6a84e', l: '#f0c674' },
 ]
 
+const SYM_NACA_PRESETS = ['0008', '0010', '0012', '0015'] as const
+
+/** Cheap fingerprint so we can skip setHydro when exports are unchanged (avoids render loops). */
+function coordsFingerprint(coords: number[][] | null | undefined): string {
+  if (!coords?.length) return '0'
+  const a = coords[0]!
+  const m = coords[coords.length >> 1]!
+  const z = coords[coords.length - 1]!
+  return `${coords.length}:${a[0]},${a[1]}:${m[0]},${m[1]}:${z[0]},${z[1]}`
+}
+
 function newId(): string {
   return `foil-${globalThis.crypto?.randomUUID?.() ?? Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 }
@@ -52,10 +63,14 @@ function cloneAirfoil(af: Airfoil): Airfoil {
 
 type SetHydro = (fn: (p: HydroFormState) => HydroFormState) => void
 
-type Props = { setHydro: SetHydro }
+type Props = {
+  setHydro: SetHydro
+  seedSource: HydroFormState['seedSource']
+  seedSectionId: HydroFormState['seedSectionId']
+}
 
 export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilWorkshop(
-  { setHydro },
+  { setHydro, seedSource, seedSectionId },
   ref,
 ) {
   const initId = useRef(newId())
@@ -68,17 +83,17 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
   const [zoom, setZoom] = useState(1)
   const [showReference, setShowReference] = useState(true)
   const [resetViewKey, setResetViewKey] = useState(0)
-  const [splineTouched, setSplineTouched] = useState(false)
   const [importErr, setImportErr] = useState<string | null>(null)
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [nacaDraft, setNacaDraft] = useState('0012')
+  const activeImportInputRef = useRef<HTMLInputElement>(null)
+  const modalImportInputRef = useRef<HTMLInputElement>(null)
   const previewSamples = 200
 
   const active = useMemo(
     () => foils.find((f) => f.id === activeId) ?? foils[0]!,
     [foils, activeId],
   )
-  const debouncedActive = useDebouncedValue(active, 250)
-  const airfoilRef = useRef(active.airfoil)
-  airfoilRef.current = active.airfoil
 
   const maxDevPct = useMemo(() => {
     const dense = sampleAirfoil(active.airfoil, 200, 'cosine')
@@ -107,18 +122,6 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
     return out
   }, [foils, activeId, previewSamples])
 
-  const pushToHydro = useCallback(
-    (f: FoilEntry) => {
-      const c = exportSeligCoords(f.airfoil, { nPerSurface: samples, spacing })
-      setHydro((s) => ({
-        ...s,
-        seedSource: 'upload',
-        seedUploadCoords: c.points,
-      }))
-    },
-    [samples, spacing, setHydro],
-  )
-
   useImperativeHandle(
     ref,
     () => ({
@@ -134,32 +137,133 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
   )
 
   useEffect(() => {
-    if (!splineTouched) return
-    pushToHydro(debouncedActive)
-  }, [debouncedActive, pushToHydro, splineTouched])
-
-  useEffect(() => {
-    if (!splineTouched) return
-    pushToHydro({ ...active, airfoil: airfoilRef.current })
-  }, [samples, spacing, splineTouched, active, pushToHydro])
+    const opts = foils.map((f) => ({ id: f.id, name: f.name }))
+    const optsJson = JSON.stringify(opts)
+    if (seedSource !== 'section') {
+      setHydro((s) => {
+        if (JSON.stringify(s.foilSectionOptions) === optsJson) return s
+        return { ...s, foilSectionOptions: opts }
+      })
+      return
+    }
+    setHydro((s) => {
+      const inList = (id: string | null) => Boolean(id && foils.some((f) => f.id === id))
+      const resolved = inList(s.seedSectionId) ? s.seedSectionId! : foils[0]?.id ?? null
+      if (!resolved) {
+        const next = { ...s, foilSectionOptions: opts, seedUploadCoords: null, seedSectionId: null }
+        if (
+          JSON.stringify(s.foilSectionOptions) === optsJson &&
+          s.seedSectionId === null &&
+          s.seedUploadCoords === null
+        ) {
+          return s
+        }
+        return next
+      }
+      const f = foils.find((x) => x.id === resolved)
+      if (!f) {
+        const next = { ...s, foilSectionOptions: opts, seedUploadCoords: null, seedSectionId: null }
+        if (
+          JSON.stringify(s.foilSectionOptions) === optsJson &&
+          s.seedSectionId === null &&
+          s.seedUploadCoords === null
+        ) {
+          return s
+        }
+        return next
+      }
+      const c = exportSeligCoords(f.airfoil, { nPerSurface: samples, spacing })
+      const fp = coordsFingerprint(c.points)
+      if (
+        s.seedSectionId === resolved &&
+        coordsFingerprint(s.seedUploadCoords) === fp &&
+        JSON.stringify(s.foilSectionOptions) === optsJson
+      ) {
+        return s
+      }
+      return {
+        ...s,
+        foilSectionOptions: opts,
+        seedUploadCoords: c.points,
+        seedSectionId: resolved,
+      }
+    })
+  }, [foils, samples, spacing, seedSource, seedSectionId, setHydro])
 
   const onAirfoilChange = useCallback(
     (next: Airfoil) => {
-      setSplineTouched(true)
       setFoils((rows) => rows.map((r) => (r.id === activeId ? { ...r, airfoil: next } : r)))
     },
     [activeId],
   )
 
-  const addFoil = useCallback(() => {
-    const id = newId()
-    const n = foils.length + 1
-    setFoils((r) => [
-      ...r,
-      { id, name: `Foil ${n}`, airfoil: buildNaca0012(), visible: true, inPolars: true },
-    ])
-    setActiveId(id)
-  }, [foils.length])
+  const appendFoilEntry = useCallback((entry: FoilEntry) => {
+    setFoils((rows) => [...rows, entry])
+    setActiveId(entry.id)
+  }, [])
+
+  const addSymmetricNacaSection = useCallback(
+    (code: string) => {
+      setImportErr(null)
+      try {
+        const af = buildSymmetricNaca00(code)
+        appendFoilEntry({
+          id: newId(),
+          name: af.name,
+          airfoil: af,
+          visible: true,
+          inPolars: true,
+        })
+        setAddModalOpen(false)
+      } catch (err) {
+        setImportErr(err instanceof Error ? err.message : String(err))
+      }
+    },
+    [appendFoilEntry],
+  )
+
+  const ingestDatFile = useCallback(
+    async (file: File, mode: 'active' | 'new') => {
+      setImportErr(null)
+      try {
+        const { coordinates } = await api.parseDat(await file.text())
+        const baseName = file.name.replace(/\.[^.]+$/i, '') || 'uploaded'
+        const nextAf = buildAirfoilFromSeligPoints(coordinates, { name: baseName })
+        if (mode === 'active') {
+          setFoils((rows) =>
+            rows.map((r) =>
+              r.id === activeId ? { ...r, airfoil: nextAf, name: baseName || r.name } : r,
+            ),
+          )
+        } else {
+          const id = newId()
+          setFoils((rows) => [
+            ...rows,
+            {
+              id,
+              name: baseName || `Foil ${rows.length + 1}`,
+              airfoil: nextAf,
+              visible: true,
+              inPolars: true,
+            },
+          ])
+          setActiveId(id)
+        }
+      } catch (err) {
+        setImportErr(err instanceof Error ? err.message : String(err))
+      }
+    },
+    [activeId],
+  )
+
+  useEffect(() => {
+    if (!addModalOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAddModalOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [addModalOpen])
 
   const duplicateFoil = useCallback(
     (id: string) => {
@@ -195,7 +299,6 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
 
   const changeTeGap = useCallback(
     (gap: number) => {
-      setSplineTouched(true)
       setFoils((rows) =>
         rows.map((r) => (r.id === activeId ? { ...r, airfoil: withFixedPoints({ ...r.airfoil, teGap: gap }) } : r)),
       )
@@ -206,9 +309,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
   const resetActiveToNaca = useCallback(() => {
     const next = buildNaca0012()
     setFoils((rows) => rows.map((r) => (r.id === activeId ? { ...r, airfoil: next, name: r.name } : r)))
-    setSplineTouched(true)
-    pushToHydro({ ...active, airfoil: next })
-  }, [activeId, active, pushToHydro])
+  }, [activeId])
 
   const resetView = useCallback(() => {
     setZoom(1)
@@ -238,17 +339,110 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
     <section className="foil-workshop">
       <h3 className="foil-workshop-title">Foil sections</h3>
       <p className="hint foil-workshop-hint">
-        The spline view is the only airfoil plot: select a section, edit it, and check <strong>plr</strong> for
-        multi-foil polars. Load a <strong>Selig .dat</strong> (same order the server exports) into the active section
-        under <strong>Active foil</strong>, then use the control points to tweak it. The active section updates the app
-        seed (sidebar) for optimisation.
+        Select a section, edit splines, check <strong>plr</strong> for multi-foil polars. Import a Selig{' '}
+        <strong>.dat</strong> into the <strong>active</strong> section from the list panel, or add a section via{' '}
+        <strong>+ Add</strong> (NACA or file). The active section drives the app seed for optimisation.
       </p>
       {importErr && <p className="error foil-import-error">{importErr}</p>}
+      {addModalOpen && (
+        <div
+          className="foil-modal-backdrop"
+          role="presentation"
+          onClick={() => {
+            setAddModalOpen(false)
+            setImportErr(null)
+          }}
+        >
+          <div
+            className="foil-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="foil-add-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="foil-modal-head">
+              <h4 id="foil-add-modal-title">Add section</h4>
+              <button
+                type="button"
+                className="foil-modal-close"
+                aria-label="Close"
+                onClick={() => {
+                  setAddModalOpen(false)
+                  setImportErr(null)
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <p className="hint foil-modal-lead">
+              Symmetric <strong>NACA 00TT</strong> uses the same spline fit as the default 0012. Cambered codes (2412,
+              …) are not available here yet — use <strong>Import from file</strong> instead.
+            </p>
+            <div className="foil-modal-section">
+              <span className="foil-modal-label">Quick symmetric</span>
+              <div className="foil-naca-chips">
+                {SYM_NACA_PRESETS.map((code) => (
+                  <button key={code} type="button" className="ghost small" onClick={() => addSymmetricNacaSection(code)}>
+                    NACA {code}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="foil-modal-section">
+              <label className="foil-modal-field">
+                <span className="foil-modal-label">Custom 00TT</span>
+                <div className="foil-modal-row">
+                  <input
+                    className="foil-modal-input"
+                    value={nacaDraft}
+                    onChange={(e) => setNacaDraft(e.target.value)}
+                    placeholder="0012"
+                    maxLength={8}
+                    inputMode="numeric"
+                  />
+                  <button type="button" className="primary small" onClick={() => addSymmetricNacaSection(nacaDraft)}>
+                    Add
+                  </button>
+                </div>
+              </label>
+            </div>
+            <div className="foil-modal-section">
+              <span className="foil-modal-label">From file</span>
+              <p className="hint foil-modal-file-hint">Selig order (TE → LE upper, LE → TE lower), same as server export.</p>
+              <input
+                ref={modalImportInputRef}
+                type="file"
+                accept=".dat,.txt"
+                className="visually-hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!file) return
+                  await ingestDatFile(file, 'new')
+                  setAddModalOpen(false)
+                }}
+              />
+              <button type="button" className="primary small" onClick={() => modalImportInputRef.current?.click()}>
+                Choose .dat / .txt…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="foil-workshop-layout">
         <aside className="foil-list-panel">
           <div className="foil-list-header">
             <span>Sections ({foils.length})</span>
-            <button type="button" className="primary small" onClick={addFoil} title="Add another foil">
+            <button
+              type="button"
+              className="primary small"
+              onClick={() => {
+                setImportErr(null)
+                setNacaDraft('0012')
+                setAddModalOpen(true)
+              }}
+              title="Add section"
+            >
               + Add
             </button>
           </div>
@@ -318,6 +512,25 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
               )
             })}
           </ul>
+          <div className="foil-list-import">
+            <span className="foil-list-import-label">Import into active</span>
+            <input
+              ref={activeImportInputRef}
+              type="file"
+              accept=".dat,.txt"
+              className="visually-hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (!file) return
+                await ingestDatFile(file, 'active')
+              }}
+            />
+            <button type="button" className="ghost small foil-list-import-btn" onClick={() => activeImportInputRef.current?.click()}>
+              Choose .dat / .txt…
+            </button>
+            <p className="hint foil-list-import-hint">Replaces the active section geometry; tweak with control points after import.</p>
+          </div>
         </aside>
 
         <div className="foil-workshop-center">
@@ -335,7 +548,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
           </div>
         </div>
 
-        <aside className="seed-spline-side foil-side-panel">
+        <aside className="seed-spline-side foil-side-panel foil-tools-column">
           <div className="seed-spline-block">
             <h4>View</h4>
             <label className="seed-spline-field">
@@ -400,48 +613,20 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
             </label>
           </div>
           <div className="seed-spline-block">
-            <h4>Active foil</h4>
-            <label className="seed-spline-field">
-              <span>Import Selig .dat / .txt</span>
-              <input
-                type="file"
-                accept=".dat,.txt"
-                onChange={async (e) => {
-                  setImportErr(null)
-                  const file = e.target.files?.[0]
-                  e.target.value = ''
-                  if (!file) return
-                  try {
-                    const { coordinates } = await api.parseDat(await file.text())
-                    const baseName = file.name.replace(/\.[^.]+$/i, '')
-                    const nextAf = buildAirfoilFromSeligPoints(coordinates, { name: baseName || 'uploaded' })
-                    setFoils((rows) =>
-                      rows.map((r) =>
-                        r.id === activeId
-                          ? { ...r, airfoil: nextAf, name: baseName || r.name }
-                          : r,
-                      ),
-                    )
-                    setSplineTouched(true)
-                  } catch (err) {
-                    setImportErr(err instanceof Error ? err.message : String(err))
-                  }
-                }}
-              />
-            </label>
-            <p className="hint foil-import-hint">
-              Fitted the same way as the NACA 0012 path in airfoil_analyser (B-spline LSQ, x = t² on chord). Trailing
-              edge uses the file y (cambered foils, not a forced symmetric gap), so the shape should track your .dat.
+            <h4>Export active</h4>
+            <p className="hint foil-export-hint">
+              B-spline LSQ match to samples (same idea as the NACA path). TE gap from sampling, not a forced symmetric
+              closure on cambered files.
             </p>
-            <div className="seed-spline-actions">
+            <div className="seed-spline-actions seed-spline-actions-compact">
               <button type="button" onClick={resetActiveToNaca}>
-                Reset to NACA 0012
+                Reset to 0012
               </button>
               <button type="button" onClick={() => void copyDat()}>
                 Copy .dat
               </button>
               <button type="button" onClick={downloadDat}>
-                Download .dat
+                Download
               </button>
             </div>
           </div>

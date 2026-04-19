@@ -14,9 +14,14 @@ export interface OperatingPoint {
 export interface HydroFormState {
   componentType: ComponentType
   presetKey: string
-  seedSource: 'library' | 'upload'
+  seedSource: 'library' | 'section'
   seedLibraryName: string
+  /** Optimisation / API seed when ``seedSource === 'section'`` (Selig N×2). Synced from Foil workshop. */
   seedUploadCoords: number[][] | null
+  /** Which foil section row supplies ``seedUploadCoords`` when using sections. */
+  seedSectionId: string | null
+  /** Section id + name list from the foil workshop (sidebar picker). */
+  foilSectionOptions: { id: string; name: string }[]
   compareEnabled: boolean
   compareSource: 'library' | 'upload'
   compareLibraryName: string
@@ -96,6 +101,8 @@ export function initialHydroForm(): HydroFormState {
     seedSource: 'library',
     seedLibraryName: 'NACA 0012',
     seedUploadCoords: null,
+    seedSectionId: null,
+    foilSectionOptions: [],
     compareEnabled: false,
     compareSource: 'library',
     compareLibraryName: 'NACA 0010',

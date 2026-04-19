@@ -4,10 +4,13 @@
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const backendDir = resolve(join(pkgRoot, 'backend'))
+/** Watch HydroOptFoil sources too — default uvicorn cwd-only reload misses ``../airfoil_optimiser/hydrooptfoil``. */
+const hydrooptfoilDir = resolve(join(pkgRoot, '..', 'airfoil_optimiser', 'hydrooptfoil'))
 
 /** Pick first port in [start, end] that accepts a listen on host. */
 function findFreePort(host, start, end) {
@@ -58,6 +61,10 @@ const api = spawn(
     'uvicorn',
     'server:app',
     '--reload',
+    '--reload-dir',
+    backendDir,
+    '--reload-dir',
+    hydrooptfoilDir,
     '--host',
     '127.0.0.1',
     '--port',
