@@ -18,19 +18,81 @@ import {
 } from './polarFlexShared'
 import { FoilWorkshop, type FoilWorkshopHandle } from '../splineEditor/FoilWorkshop'
 import { type MergedPolars, runMergedSeedPolars } from '../seedPolarsRun'
+import { clampReN, logReSamples } from '../logReSamples'
+import { ReynoldsDistEditor } from './ReynoldsDistEditor'
+import { AlphaSweepPanel } from './AlphaSweepPanel'
+import { fmtRePolar, REYNOLDS_PRESETS } from '../polarPanelPresets'
+import {
+  nearestSeedNcrit,
+  SEED_MODEL_SIZE_OPTIONS,
+  SEED_NCRIT_OPTIONS,
+  type SeedModelSize,
+} from '../seedPolarNcritModel'
+import { clamp, clampAlpha, clampReRange, RE_AXIS_MAX, RE_AXIS_MIN } from '../seedPolarLimits'
 
 type SetHydro = (fn: (p: HydroFormState) => HydroFormState) => void
 
 type Props = { form: HydroFormState; setHydro: SetHydro }
 
+function IconSparkle() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="seed-polar-presets-icon">
+      <path
+        d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function parseReList(text: string): number[] {
+  return text
+    .split(/[\s,;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => Number(t))
+    .filter((x) => Number.isFinite(x) && x > 0)
+}
+
+function applyParsedReToDist(
+  nums: number[],
+  setDistLo: (n: number) => void,
+  setDistHi: (n: number) => void,
+  setDistN: (n: number) => void,
+) {
+  if (nums.length >= 2) {
+    const rawLo = Math.min(...nums.map((x) => Math.round(x)))
+    const rawHi = Math.max(...nums.map((x) => Math.round(x)))
+    const { lo, hi } = clampReRange(
+      clamp(rawLo, RE_AXIS_MIN, RE_AXIS_MAX),
+      clamp(rawHi, RE_AXIS_MIN, RE_AXIS_MAX),
+    )
+    setDistLo(lo)
+    setDistHi(hi)
+    setDistN(clampReN(nums.length))
+  } else if (nums.length === 1) {
+    const u = clamp(Math.round(nums[0]!), RE_AXIS_MIN, RE_AXIS_MAX)
+    let lo = Math.max(RE_AXIS_MIN, Math.round(u / 5))
+    let hi = Math.min(RE_AXIS_MAX, Math.round(u * 5))
+    const pair = clampReRange(lo, hi)
+    setDistLo(pair.lo)
+    setDistHi(pair.hi)
+    setDistN(4)
+  }
+}
+
 export function SeedTab({ form, setHydro }: Props) {
   const workshopRef = useRef<FoilWorkshopHandle | null>(null)
-  const [reText, setReText] = useState('')
+  const [distLo, setDistLo] = useState(100_000)
+  const [distHi, setDistHi] = useState(2_000_000)
+  const [distN, setDistN] = useState(4)
   const [ncrit, setNcrit] = useState(7)
-  const [modelSize, setModelSize] = useState<'large' | 'xlarge'>('xlarge')
-  const [alphaStartStr, setAlphaStartStr] = useState('-5')
-  const [alphaEndStr, setAlphaEndStr] = useState('5')
-  const [alphaStepStr, setAlphaStepStr] = useState('0.25')
+  const [modelSize, setModelSize] = useState<SeedModelSize>('xlarge')
+  const [alpha0, setAlpha0] = useState(-5)
+  const [alpha1, setAlpha1] = useState(5)
+  const [alphaStep, setAlphaStep] = useState(0.25)
   const [merged, setMerged] = useState<MergedPolars | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -51,40 +113,42 @@ export function SeedTab({ form, setHydro }: Props) {
   }, [form])
 
   useEffect(() => {
-    setNcrit(ncritDefault)
-    setReText((t) => (t ? t : defaultReText))
+    setNcrit(nearestSeedNcrit(ncritDefault))
+  }, [ncritDefault])
+
+  useEffect(() => {
+    const nums = parseReList(defaultReText)
+    if (nums.length) applyParsedReToDist(nums, setDistLo, setDistHi, setDistN)
+  }, [defaultReText, form.componentType])
+
+  useEffect(() => {
     if (form.componentType === 'front_wing') {
-      setAlphaStartStr('-5')
-      setAlphaEndStr('15')
-      setAlphaStepStr('0.5')
+      setAlpha0(-5)
+      setAlpha1(15)
+      setAlphaStep(0.5)
     } else {
-      setAlphaStartStr('-5')
-      setAlphaEndStr('5')
-      setAlphaStepStr('0.25')
+      setAlpha0(-5)
+      setAlpha1(5)
+      setAlphaStep(0.25)
     }
-  }, [defaultReText, ncritDefault, form.componentType])
+  }, [form.componentType])
 
   async function computePolars() {
     setErr(null)
     setBusy(true)
     const w = workshopRef.current
     const myGen = ++analyzeGen.current
-    const reList = reText
-      .split(/[\s,;]+/)
-      .map((t) => t.trim())
-      .filter(Boolean)
-      .map((t) => Number(t))
-      .filter((x) => Number.isFinite(x))
+    const reList = logReSamples(distLo, distHi, distN)
     if (!reList.length) {
       setErr('Enter at least one Reynolds number')
       setBusy(false)
       return
     }
-    const a0 = parseFloat(alphaStartStr.trim())
-    const a1 = parseFloat(alphaEndStr.trim())
-    const da = parseFloat(alphaStepStr.trim())
-    if (![a0, a1, da].every(Number.isFinite)) {
-      setErr('Enter valid α start, α end, and Δα (numbers; negatives allowed for α range).')
+    const a0 = clampAlpha(alpha0)
+    const a1 = clampAlpha(alpha1)
+    const da = alphaStep
+    if (![a0, a1, da].every(Number.isFinite) || da <= 0) {
+      setErr('Enter valid α₀, α₁, and Δα (Δα must be positive).')
       setBusy(false)
       return
     }
@@ -158,6 +222,11 @@ export function SeedTab({ form, setHydro }: Props) {
     setPolarCharts((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.id !== id)))
   }, [])
 
+  const applyRePreset = useCallback((values: number[]) => {
+    if (values.length < 1) return
+    applyParsedReToDist(values, setDistLo, setDistHi, setDistN)
+  }, [])
+
   return (
     <div className="tab-seed">
       <FoilWorkshop
@@ -173,59 +242,85 @@ export function SeedTab({ form, setHydro }: Props) {
         Foil 1 in the list is the primary (gold) curve; foil 2 is the first compare (blue) when 2+ are included; further
         foils use the extra colors. Recompute after editing — the canvas above is the geometry source of truth.
       </p>
-      <label className="field">
-        <span>Reynolds numbers (comma-separated)</span>
-        <textarea
-          rows={3}
-          value={reText || defaultReText}
-          onChange={(e) => setReText(e.target.value)}
+
+      <div className="seed-polar-stack">
+        <div className="seed-polar-section">
+          <div className="seed-polar-section-head">
+            <span className="seed-polar-section-lbl">Reynolds numbers</span>
+            <span className="seed-polar-section-hint">Drag handles to set range · log-spaced sampling</span>
+          </div>
+          <ReynoldsDistEditor
+            lo={distLo}
+            hi={distHi}
+            n={distN}
+            onChange={({ lo, hi, n }) => {
+              setDistLo(lo)
+              setDistHi(hi)
+              setDistN(n)
+            }}
+          />
+        </div>
+
+        <div className="seed-polar-section">
+          <div className="seed-polar-section-head">
+            <span className="seed-polar-section-lbl seed-polar-presets-lbl">
+              <IconSparkle /> Presets
+            </span>
+            <span className="seed-polar-section-hint">Click to load</span>
+          </div>
+          <div className="seed-polar-presets">
+            {REYNOLDS_PRESETS.map((p) => (
+              <button
+                key={p.name}
+                type="button"
+                className="seed-polar-preset-chip"
+                onClick={() => applyRePreset(p.values)}
+              >
+                <span className="seed-polar-preset-name">{p.name}</span>
+                <span className="seed-polar-preset-sep">·</span>
+                <span>{p.values.length} foils</span>
+                <span className="seed-polar-preset-sep">·</span>
+                <span>
+                  {fmtRePolar(Math.min(...p.values))}–{fmtRePolar(Math.max(...p.values))}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <AlphaSweepPanel
+          a0={alpha0}
+          a1={alpha1}
+          da={alphaStep}
+          onChangeA0={setAlpha0}
+          onChangeA1={setAlpha1}
+          onChangeDa={setAlphaStep}
         />
-      </label>
-      <div className="row2">
-        <label>
-          Ncrit
-          <input type="number" value={ncrit} step={0.5} onChange={(e) => setNcrit(Number(e.target.value))} />
-        </label>
-        <label>
-          Model
-          <select value={modelSize} onChange={(e) => setModelSize(e.target.value as 'large' | 'xlarge')}>
-            <option>large</option>
-            <option>xlarge</option>
-          </select>
-        </label>
+
+        <div className="seed-polar-grid2">
+          <label className="field seed-polar-ncrit-field">
+            <span>Ncrit · transition criterion</span>
+            <select value={ncrit} onChange={(e) => setNcrit(Number(e.target.value))}>
+              {SEED_NCRIT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field seed-polar-ncrit-field">
+            <span>NeuralFoil model</span>
+            <select value={modelSize} onChange={(e) => setModelSize(e.target.value as SeedModelSize)}>
+              {SEED_MODEL_SIZE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
-      <div className="row3">
-        <label>
-          α start
-          <input
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            value={alphaStartStr}
-            onChange={(e) => setAlphaStartStr(e.target.value)}
-          />
-        </label>
-        <label>
-          α end
-          <input
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            value={alphaEndStr}
-            onChange={(e) => setAlphaEndStr(e.target.value)}
-          />
-        </label>
-        <label>
-          Δα
-          <input
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            value={alphaStepStr}
-            onChange={(e) => setAlphaStepStr(e.target.value)}
-          />
-        </label>
-      </div>
+
       <button
         type="button"
         className="primary"
