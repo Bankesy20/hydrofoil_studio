@@ -19,9 +19,7 @@ import {
 import { FoilWorkshop, type FoilWorkshopHandle } from '../splineEditor/FoilWorkshop'
 import { type MergedPolars, runMergedSeedPolars } from '../seedPolarsRun'
 import { clampReN, logReSamples } from '../logReSamples'
-import { ReynoldsDistEditor } from './ReynoldsDistEditor'
-import { AlphaSweepPanel } from './AlphaSweepPanel'
-import { fmtRePolar, REYNOLDS_PRESETS } from '../polarPanelPresets'
+import { DraftNumberInput } from './DraftNumberInput'
 import {
   nearestSeedNcrit,
   SEED_MODEL_SIZE_OPTIONS,
@@ -34,19 +32,6 @@ type SetHydro = (fn: (p: HydroFormState) => HydroFormState) => void
 
 type Props = { form: HydroFormState; setHydro: SetHydro }
 
-function IconSparkle() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="seed-polar-presets-icon">
-      <path
-        d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
 function parseReList(text: string): number[] {
   return text
     .split(/[\s,;]+/)
@@ -56,38 +41,13 @@ function parseReList(text: string): number[] {
     .filter((x) => Number.isFinite(x) && x > 0)
 }
 
-function applyParsedReToDist(
-  nums: number[],
-  setDistLo: (n: number) => void,
-  setDistHi: (n: number) => void,
-  setDistN: (n: number) => void,
-) {
-  if (nums.length >= 2) {
-    const rawLo = Math.min(...nums.map((x) => Math.round(x)))
-    const rawHi = Math.max(...nums.map((x) => Math.round(x)))
-    const { lo, hi } = clampReRange(
-      clamp(rawLo, RE_AXIS_MIN, RE_AXIS_MAX),
-      clamp(rawHi, RE_AXIS_MIN, RE_AXIS_MAX),
-    )
-    setDistLo(lo)
-    setDistHi(hi)
-    setDistN(clampReN(nums.length))
-  } else if (nums.length === 1) {
-    const u = clamp(Math.round(nums[0]!), RE_AXIS_MIN, RE_AXIS_MAX)
-    let lo = Math.max(RE_AXIS_MIN, Math.round(u / 5))
-    let hi = Math.min(RE_AXIS_MAX, Math.round(u * 5))
-    const pair = clampReRange(lo, hi)
-    setDistLo(pair.lo)
-    setDistHi(pair.hi)
-    setDistN(4)
-  }
-}
-
 export function SeedTab({ form, setHydro }: Props) {
   const workshopRef = useRef<FoilWorkshopHandle | null>(null)
   const [distLo, setDistLo] = useState(100_000)
   const [distHi, setDistHi] = useState(2_000_000)
   const [distN, setDistN] = useState(4)
+  const [singleReMode, setSingleReMode] = useState(false)
+  const [singleReValue, setSingleReValue] = useState(800_000)
   const [ncrit, setNcrit] = useState(7)
   const [modelSize, setModelSize] = useState<SeedModelSize>('xlarge')
   const [alpha0, setAlpha0] = useState(-5)
@@ -97,7 +57,13 @@ export function SeedTab({ form, setHydro }: Props) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [polarCharts, setPolarCharts] = useState<PolarChartSpec[]>(() => defaultPolarCharts())
+  const [autoCompute, setAutoCompute] = useState(false)
+  const [geometryChangeTick, setGeometryChangeTick] = useState(0)
   const analyzeGen = useRef(0)
+  const autoPendingRef = useRef(false)
+  const autoTimerRef = useRef<number | null>(null)
+  const busyRef = useRef(false)
+  const computeRef = useRef<(() => Promise<void>) | null>(null)
 
   const defaultReText = useMemo(() => {
     if (form.componentType === 'mast') {
@@ -118,7 +84,27 @@ export function SeedTab({ form, setHydro }: Props) {
 
   useEffect(() => {
     const nums = parseReList(defaultReText)
-    if (nums.length) applyParsedReToDist(nums, setDistLo, setDistHi, setDistN)
+    if (!nums.length) return
+    if (nums.length === 1) {
+      const one = clamp(Math.round(nums[0]!), RE_AXIS_MIN, RE_AXIS_MAX)
+      setSingleReMode(true)
+      setSingleReValue(one)
+      setDistLo(one)
+      setDistHi(one)
+      setDistN(1)
+      return
+    }
+    const rawLo = Math.min(...nums.map((x) => Math.round(x)))
+    const rawHi = Math.max(...nums.map((x) => Math.round(x)))
+    const { lo, hi } = clampReRange(
+      clamp(rawLo, RE_AXIS_MIN, RE_AXIS_MAX),
+      clamp(rawHi, RE_AXIS_MIN, RE_AXIS_MAX),
+    )
+    setSingleReMode(false)
+    setDistLo(lo)
+    setDistHi(hi)
+    setDistN(clampReN(nums.length))
+    setSingleReValue(lo)
   }, [defaultReText, form.componentType])
 
   useEffect(() => {
@@ -133,12 +119,14 @@ export function SeedTab({ form, setHydro }: Props) {
     }
   }, [form.componentType])
 
-  async function computePolars() {
+  const computePolars = useCallback(async () => {
     setErr(null)
     setBusy(true)
     const w = workshopRef.current
     const myGen = ++analyzeGen.current
-    const reList = logReSamples(distLo, distHi, distN)
+    const reList = singleReMode
+      ? [clamp(Math.round(singleReValue), RE_AXIS_MIN, RE_AXIS_MAX)]
+      : logReSamples(distLo, distHi, distN)
     if (!reList.length) {
       setErr('Enter at least one Reynolds number')
       setBusy(false)
@@ -180,7 +168,39 @@ export function SeedTab({ form, setHydro }: Props) {
     } finally {
       if (myGen === analyzeGen.current) setBusy(false)
     }
-  }
+  }, [alpha0, alpha1, alphaStep, distHi, distLo, distN, form, modelSize, ncrit, singleReMode, singleReValue])
+
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
+
+  useEffect(() => {
+    computeRef.current = computePolars
+  }, [computePolars])
+
+  useEffect(() => {
+    if (!autoCompute) return
+    if (geometryChangeTick < 1) return
+    autoPendingRef.current = true
+    if (autoTimerRef.current !== null) window.clearTimeout(autoTimerRef.current)
+    autoTimerRef.current = window.setTimeout(() => {
+      if (busyRef.current) return
+      autoPendingRef.current = false
+      void computeRef.current?.()
+    }, 350)
+    return () => {
+      if (autoTimerRef.current !== null) {
+        window.clearTimeout(autoTimerRef.current)
+        autoTimerRef.current = null
+      }
+    }
+  }, [autoCompute, geometryChangeTick])
+
+  useEffect(() => {
+    if (!autoCompute || busyRef.current || !autoPendingRef.current) return
+    autoPendingRef.current = false
+    void computeRef.current?.()
+  }, [autoCompute, busy])
 
   const byRe: ByReBlock | undefined = merged?.byRe
   const byReB: ByReBlock | null | undefined = merged?.byReB
@@ -222,9 +242,15 @@ export function SeedTab({ form, setHydro }: Props) {
     setPolarCharts((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.id !== id)))
   }, [])
 
-  const applyRePreset = useCallback((values: number[]) => {
-    if (values.length < 1) return
-    applyParsedReToDist(values, setDistLo, setDistHi, setDistN)
+  const movePolarChart = useCallback((from: number, to: number) => {
+    setPolarCharts((rows) => {
+      if (from < 0 || from >= rows.length || to < 0 || to >= rows.length || from === to) return rows
+      const next = [...rows]
+      const [moved] = next.splice(from, 1)
+      if (!moved) return rows
+      next.splice(to, 0, moved)
+      return next
+    })
   }, [])
 
   return (
@@ -234,101 +260,198 @@ export function SeedTab({ form, setHydro }: Props) {
         setHydro={setHydro}
         seedSource={form.seedSource}
         seedSectionId={form.seedSectionId}
+        onGeometryChange={() => setGeometryChangeTick((n) => n + 1)}
+        toolbarPanel={
+          <>
+            <h4>Polars setup</h4>
+            <div className="seed-polar-stack seed-polar-stack-compact">
+              <div className="seed-polar-section">
+                <div className="seed-polar-section-head">
+                  <span className="seed-polar-section-lbl">Reynolds numbers</span>
+                  <span className="seed-polar-section-hint">Numeric input only</span>
+                </div>
+                <label className="seed-polar-inline-check">
+                  <input
+                    type="checkbox"
+                    checked={singleReMode}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                      setSingleReMode(next)
+                      if (next) {
+                        const one = clamp(Math.round(singleReValue || distLo), RE_AXIS_MIN, RE_AXIS_MAX)
+                        setSingleReValue(one)
+                        setDistLo(one)
+                        setDistHi(one)
+                        setDistN(1)
+                      } else {
+                        const pair = clampReRange(
+                          clamp(distLo || singleReValue, RE_AXIS_MIN, RE_AXIS_MAX),
+                          clamp(distHi || singleReValue, RE_AXIS_MIN, RE_AXIS_MAX),
+                        )
+                        setDistLo(pair.lo)
+                        setDistHi(pair.hi)
+                        setDistN(Math.max(2, clampReN(distN || 4)))
+                      }
+                    }}
+                  />
+                  <span>Use one Reynolds only</span>
+                </label>
+                <div className="seed-polar-grid2 seed-polar-grid3-compact">
+                  {singleReMode ? (
+                    <label className="field seed-polar-ncrit-field">
+                      <span>Reynolds</span>
+                      <DraftNumberInput
+                        min={RE_AXIS_MIN}
+                        max={RE_AXIS_MAX}
+                        value={singleReValue}
+                        onCommit={(v) => {
+                          const clamped = clamp(Math.round(v), RE_AXIS_MIN, RE_AXIS_MAX)
+                          setSingleReValue(clamped)
+                          setDistLo(clamped)
+                          setDistHi(clamped)
+                        }}
+                      />
+                    </label>
+                  ) : (
+                    <>
+                      <label className="field seed-polar-ncrit-field">
+                        <span>Re min</span>
+                        <DraftNumberInput
+                          min={RE_AXIS_MIN}
+                          max={RE_AXIS_MAX}
+                          value={distLo}
+                          onCommit={(v) => {
+                            const lo = clamp(Math.round(v), RE_AXIS_MIN, RE_AXIS_MAX)
+                            const pair = clampReRange(lo, distHi)
+                            setDistLo(pair.lo)
+                            setDistHi(pair.hi)
+                            setSingleReValue(pair.lo)
+                          }}
+                        />
+                      </label>
+                      <label className="field seed-polar-ncrit-field">
+                        <span>Re max</span>
+                        <DraftNumberInput
+                          min={RE_AXIS_MIN}
+                          max={RE_AXIS_MAX}
+                          value={distHi}
+                          onCommit={(v) => {
+                            const hi = clamp(Math.round(v), RE_AXIS_MIN, RE_AXIS_MAX)
+                            const pair = clampReRange(distLo, hi)
+                            setDistLo(pair.lo)
+                            setDistHi(pair.hi)
+                          }}
+                        />
+                      </label>
+                      <label className="field seed-polar-ncrit-field">
+                        <span>Re points (n)</span>
+                        <DraftNumberInput
+                          min={2}
+                          max={6}
+                          value={Math.max(2, distN)}
+                          onCommit={(v) => {
+                            setDistN(Math.max(2, clampReN(v)))
+                          }}
+                        />
+                      </label>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="seed-polar-grid2 seed-polar-grid3-compact">
+                <label className="field seed-polar-ncrit-field seed-polar-alpha-field">
+                  <span>Alpha min (deg)</span>
+                  <DraftNumberInput
+                    min={-20}
+                    max={20}
+                    roundTo={0.25}
+                    value={alpha0}
+                    onCommit={(v) => {
+                      setAlpha0(clampAlpha(v))
+                    }}
+                  />
+                </label>
+                <label className="field seed-polar-ncrit-field seed-polar-alpha-field">
+                  <span>Alpha max (deg)</span>
+                  <DraftNumberInput
+                    min={-20}
+                    max={20}
+                    roundTo={0.25}
+                    value={alpha1}
+                    onCommit={(v) => {
+                      setAlpha1(clampAlpha(v))
+                    }}
+                  />
+                </label>
+                <label className="field seed-polar-ncrit-field seed-polar-alpha-field">
+                  <span>Delta alpha (deg)</span>
+                  <DraftNumberInput
+                    min={0.05}
+                    max={40}
+                    roundTo={0.05}
+                    value={alphaStep}
+                    onCommit={(v) => {
+                      setAlphaStep(Math.max(0.05, v))
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div className="seed-polar-grid2">
+                <label className="field seed-polar-ncrit-field">
+                  <span>Ncrit</span>
+                  <select value={ncrit} onChange={(e) => setNcrit(Number(e.target.value))}>
+                    {SEED_NCRIT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field seed-polar-ncrit-field">
+                  <span>Model</span>
+                  <select value={modelSize} onChange={(e) => setModelSize(e.target.value as SeedModelSize)}>
+                    {SEED_MODEL_SIZE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="primary seed-polar-compact-run"
+              disabled={busy}
+              onClick={() => void computePolars()}
+            >
+              {busy ? 'Computing…' : 'Compute polars'}
+            </button>
+            <label className="seed-polar-inline-check seed-polar-autocompute-check">
+              <input
+                type="checkbox"
+                checked={autoCompute}
+                onChange={(e) => {
+                  const next = e.target.checked
+                  setAutoCompute(next)
+                  if (next) {
+                    if (busy) {
+                      autoPendingRef.current = true
+                    } else {
+                      autoPendingRef.current = false
+                      void computePolars()
+                    }
+                  }
+                }}
+              />
+              <span>Auto compute on spline edits</span>
+            </label>
+          </>
+        }
       />
       {err && <p className="error">{err}</p>}
-
-      <h3>NeuralFoil polars (multi-foil)</h3>
-      <p className="hint">
-        Foil 1 in the list is the primary (gold) curve; foil 2 is the first compare (blue) when 2+ are included; further
-        foils use the extra colors. Recompute after editing — the canvas above is the geometry source of truth.
-      </p>
-
-      <div className="seed-polar-stack">
-        <div className="seed-polar-section">
-          <div className="seed-polar-section-head">
-            <span className="seed-polar-section-lbl">Reynolds numbers</span>
-            <span className="seed-polar-section-hint">Drag handles to set range · log-spaced sampling</span>
-          </div>
-          <ReynoldsDistEditor
-            lo={distLo}
-            hi={distHi}
-            n={distN}
-            onChange={({ lo, hi, n }) => {
-              setDistLo(lo)
-              setDistHi(hi)
-              setDistN(n)
-            }}
-          />
-        </div>
-
-        <div className="seed-polar-section">
-          <div className="seed-polar-section-head">
-            <span className="seed-polar-section-lbl seed-polar-presets-lbl">
-              <IconSparkle /> Presets
-            </span>
-            <span className="seed-polar-section-hint">Click to load</span>
-          </div>
-          <div className="seed-polar-presets">
-            {REYNOLDS_PRESETS.map((p) => (
-              <button
-                key={p.name}
-                type="button"
-                className="seed-polar-preset-chip"
-                onClick={() => applyRePreset(p.values)}
-              >
-                <span className="seed-polar-preset-name">{p.name}</span>
-                <span className="seed-polar-preset-sep">·</span>
-                <span>{p.values.length} foils</span>
-                <span className="seed-polar-preset-sep">·</span>
-                <span>
-                  {fmtRePolar(Math.min(...p.values))}–{fmtRePolar(Math.max(...p.values))}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <AlphaSweepPanel
-          a0={alpha0}
-          a1={alpha1}
-          da={alphaStep}
-          onChangeA0={setAlpha0}
-          onChangeA1={setAlpha1}
-          onChangeDa={setAlphaStep}
-        />
-
-        <div className="seed-polar-grid2">
-          <label className="field seed-polar-ncrit-field">
-            <span>Ncrit · transition criterion</span>
-            <select value={ncrit} onChange={(e) => setNcrit(Number(e.target.value))}>
-              {SEED_NCRIT_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field seed-polar-ncrit-field">
-            <span>NeuralFoil model</span>
-            <select value={modelSize} onChange={(e) => setModelSize(e.target.value as SeedModelSize)}>
-              {SEED_MODEL_SIZE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        className="primary"
-        disabled={busy}
-        onClick={() => void computePolars()}
-      >
-        {busy ? 'Computing…' : 'Compute polars'}
-      </button>
 
       {byRe && firstPolarBlock && hasProfileData(firstPolarBlock.detailed as Record<string, unknown>) && (
         <ChordCpAtAlphaBlock
@@ -356,23 +479,29 @@ export function SeedTab({ form, setHydro }: Props) {
             </button>
           </div>
 
-          {polarCharts.map((spec) => (
-            <PolarFlexChartRow
-              key={spec.id}
-              spec={spec}
-              axisOptions={axisOptions}
-              byRe={byRe!}
-              byReB={byReB ?? undefined}
-              extraByReList={extraByReList}
-              golds={GOLD_RE}
-              blues={BLUE_CMP}
-              onChange={(next) => setPolarCharts((rows) => rows.map((r) => (r.id === spec.id ? next : r)))}
-              onRemove={() => removePolarChart(spec.id)}
-              canRemove={polarCharts.length > 1}
-              primaryLabel={primaryL}
-              compareLabel={compareL || undefined}
-            />
-          ))}
+          <div className="polar-flex-grid">
+            {polarCharts.map((spec, idx) => (
+              <PolarFlexChartRow
+                key={spec.id}
+                spec={spec}
+                axisOptions={axisOptions}
+                byRe={byRe!}
+                byReB={byReB ?? undefined}
+                extraByReList={extraByReList}
+                golds={GOLD_RE}
+                blues={BLUE_CMP}
+                onChange={(next) => setPolarCharts((rows) => rows.map((r) => (r.id === spec.id ? next : r)))}
+                onRemove={() => removePolarChart(spec.id)}
+                onMoveUp={() => movePolarChart(idx, idx - 1)}
+                onMoveDown={() => movePolarChart(idx, idx + 1)}
+                canRemove={polarCharts.length > 1}
+                canMoveUp={idx > 0}
+                canMoveDown={idx < polarCharts.length - 1}
+                primaryLabel={primaryL}
+                compareLabel={compareL || undefined}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

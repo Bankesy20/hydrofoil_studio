@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  type ReactNode,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -67,10 +68,12 @@ type Props = {
   setHydro: SetHydro
   seedSource: HydroFormState['seedSource']
   seedSectionId: HydroFormState['seedSectionId']
+  toolbarPanel?: ReactNode
+  onGeometryChange?: () => void
 }
 
 export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilWorkshop(
-  { setHydro, seedSource, seedSectionId },
+  { setHydro, seedSource, seedSectionId, toolbarPanel, onGeometryChange },
   ref,
 ) {
   const initId = useRef(newId())
@@ -214,12 +217,13 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
           visible: true,
           inPolars: true,
         })
+        onGeometryChange?.()
         setAddModalOpen(false)
       } catch (err) {
         setImportErr(err instanceof Error ? err.message : String(err))
       }
     },
-    [appendFoilEntry],
+    [appendFoilEntry, onGeometryChange],
   )
 
   const ingestDatFile = useCallback(
@@ -235,6 +239,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
               r.id === activeId ? { ...r, airfoil: nextAf, name: baseName || r.name } : r,
             ),
           )
+          onGeometryChange?.()
         } else {
           const id = newId()
           setFoils((rows) => [
@@ -248,12 +253,13 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
             },
           ])
           setActiveId(id)
+          onGeometryChange?.()
         }
       } catch (err) {
         setImportErr(err instanceof Error ? err.message : String(err))
       }
     },
-    [activeId],
+    [activeId, onGeometryChange],
   )
 
   useEffect(() => {
@@ -284,8 +290,9 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
         return next
       })
       setActiveId(nid)
+      onGeometryChange?.()
     },
-    [foils],
+    [foils, onGeometryChange],
   )
 
   const removeFoil = useCallback((id: string) => {
@@ -302,14 +309,16 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
       setFoils((rows) =>
         rows.map((r) => (r.id === activeId ? { ...r, airfoil: withFixedPoints({ ...r.airfoil, teGap: gap }) } : r)),
       )
+      onGeometryChange?.()
     },
-    [activeId],
+    [activeId, onGeometryChange],
   )
 
   const resetActiveToNaca = useCallback(() => {
     const next = buildNaca0012()
     setFoils((rows) => rows.map((r) => (r.id === activeId ? { ...r, airfoil: next, name: r.name } : r)))
-  }, [activeId])
+    onGeometryChange?.()
+  }, [activeId, onGeometryChange])
 
   const resetView = useCallback(() => {
     setZoom(1)
@@ -336,7 +345,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
   }
 
   return (
-    <section className="foil-workshop">
+    <section className="foil-workshop foil-workshop-dash">
       <h3 className="foil-workshop-title">Foil sections</h3>
       <p className="hint foil-workshop-hint">
         Select a section, edit splines, check <strong>plr</strong> for multi-foil polars. Import a Selig{' '}
@@ -435,7 +444,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
             <span>Sections ({foils.length})</span>
             <button
               type="button"
-              className="primary small"
+              className="primary small foil-btn-add"
               onClick={() => {
                 setImportErr(null)
                 setNacaDraft('0012')
@@ -473,7 +482,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
                         setFoils((rows) => rows.map((r) => (r.id === f.id ? { ...r, visible: e.target.checked } : r)))
                       }
                     />
-                    <span aria-hidden>vis</span>
+                    <span aria-hidden>VIS</span>
                   </label>
                   <label className="foil-ico" title="Include in polar run" onClick={(e) => e.stopPropagation()}>
                     <input
@@ -483,7 +492,7 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
                         setFoils((rows) => rows.map((r) => (r.id === f.id ? { ...r, inPolars: e.target.checked } : r)))
                       }
                     />
-                    <span aria-hidden>plr</span>
+                    <span aria-hidden>PLR</span>
                   </label>
                   <button
                     type="button"
@@ -533,104 +542,111 @@ export const FoilWorkshop = forwardRef<FoilWorkshopHandle, Props>(function FoilW
           </div>
         </aside>
 
-        <div className="foil-workshop-center">
-          <div className="seed-spline-editor-wrap foil-editor-frame">
-            <AirfoilEditor
-              key={resetViewKey}
-              airfoil={active.airfoil}
-              onChange={onAirfoilChange}
-              zoom={zoom}
-              onZoomChange={setZoom}
-              showReference={showReference}
-              previewSamples={previewSamples}
-              peerOverlays={peerOverlays}
-            />
+        <div className="foil-workshop-main">
+          <div className="foil-tools-toolbar" aria-label="Foil view, sampling, and export">
+            <div className="seed-spline-block foil-tool-card">
+              <h4>View</h4>
+              <label className="seed-spline-field">
+                Zoom: <strong>{zoom.toFixed(1)}×</strong>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={40}
+                  step={0.1}
+                  value={zoom}
+                  onChange={(e) => setZoom(parseFloat(e.target.value))}
+                />
+              </label>
+              <label className="seed-spline-check">
+                <input
+                  type="checkbox"
+                  checked={showReference}
+                  onChange={(e) => setShowReference(e.target.checked)}
+                />
+                <span>NACA 0012 reference (dashed)</span>
+              </label>
+              <button type="button" className="ghost" onClick={resetView}>
+                Reset view
+              </button>
+              <p className="hint">
+                Max deviation from analytic NACA 0012: <strong>{maxDevPct.toFixed(3)}% chord</strong>
+              </p>
+            </div>
+            <div className="seed-spline-block foil-tool-card">
+              <h4>Sampling (export & polars)</h4>
+              <label className="seed-spline-field">
+                Points per surface: <strong>{samples}</strong>
+                <input
+                  type="range"
+                  min={20}
+                  max={200}
+                  step={2}
+                  value={samples}
+                  onChange={(e) => setSamples(parseInt(e.target.value, 10))}
+                />
+              </label>
+              <label className="seed-spline-field">
+                Spacing
+                <select
+                  value={spacing}
+                  onChange={(e) => setSpacing(e.target.value as 'cosine' | 'uniform')}
+                >
+                  <option value="cosine">Cosine (LE/TE)</option>
+                  <option value="uniform">Uniform</option>
+                </select>
+              </label>
+              <label className="seed-spline-field">
+                TE gap (% chord): <strong>{(active.airfoil.teGap * 100).toFixed(2)}</strong>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={active.airfoil.teGap * 100}
+                  onChange={(e) => changeTeGap(parseFloat(e.target.value) / 100)}
+                />
+              </label>
+            </div>
+            {toolbarPanel ? (
+              <div className="seed-spline-block foil-tool-card foil-tool-card-polar">{toolbarPanel}</div>
+            ) : (
+              <div className="seed-spline-block foil-tool-card foil-tool-card-export">
+                <h4>Export active</h4>
+                <p className="hint foil-export-hint">
+                  B-spline LSQ match to samples (same idea as the NACA path). TE gap from sampling, not a forced symmetric
+                  closure on cambered files.
+                </p>
+                <div className="seed-spline-actions seed-spline-actions-compact">
+                  <button type="button" onClick={resetActiveToNaca}>
+                    Reset to 0012
+                  </button>
+                  <button type="button" onClick={() => void copyDat()}>
+                    Copy .dat
+                  </button>
+                  <button type="button" className="primary foil-btn-download" onClick={downloadDat}>
+                    Download
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
 
-        <aside className="seed-spline-side foil-side-panel foil-tools-column">
-          <div className="seed-spline-block">
-            <h4>View</h4>
-            <label className="seed-spline-field">
-              Zoom: <strong>{zoom.toFixed(1)}×</strong>
-              <input
-                type="range"
-                min={0.5}
-                max={40}
-                step={0.1}
-                value={zoom}
-                onChange={(e) => setZoom(parseFloat(e.target.value))}
+          <div className="foil-workshop-center">
+            <div className="seed-spline-editor-wrap foil-editor-frame">
+              <AirfoilEditor
+                key={resetViewKey}
+                airfoil={active.airfoil}
+                onChange={onAirfoilChange}
+                onEditCommit={onGeometryChange}
+                zoom={zoom}
+                onZoomChange={setZoom}
+                showReference={showReference}
+                previewSamples={previewSamples}
+                peerOverlays={peerOverlays}
               />
-            </label>
-            <label className="seed-spline-check">
-              <input
-                type="checkbox"
-                checked={showReference}
-                onChange={(e) => setShowReference(e.target.checked)}
-              />
-              <span>NACA 0012 reference (dashed)</span>
-            </label>
-            <button type="button" className="ghost" onClick={resetView}>
-              Reset view
-            </button>
-            <p className="hint">
-              Max deviation from analytic NACA 0012: <strong>{maxDevPct.toFixed(3)}% chord</strong>
-            </p>
-          </div>
-          <div className="seed-spline-block">
-            <h4>Sampling (export & polars)</h4>
-            <label className="seed-spline-field">
-              Points per surface: <strong>{samples}</strong>
-              <input
-                type="range"
-                min={20}
-                max={200}
-                step={2}
-                value={samples}
-                onChange={(e) => setSamples(parseInt(e.target.value, 10))}
-              />
-            </label>
-            <label className="seed-spline-field">
-              Spacing
-              <select
-                value={spacing}
-                onChange={(e) => setSpacing(e.target.value as 'cosine' | 'uniform')}
-              >
-                <option value="cosine">Cosine (LE/TE)</option>
-                <option value="uniform">Uniform</option>
-              </select>
-            </label>
-            <label className="seed-spline-field">
-              TE gap (% chord): <strong>{(active.airfoil.teGap * 100).toFixed(2)}</strong>
-              <input
-                type="range"
-                min={0}
-                max={2}
-                step={0.05}
-                value={active.airfoil.teGap * 100}
-                onChange={(e) => changeTeGap(parseFloat(e.target.value) / 100)}
-              />
-            </label>
-          </div>
-          <div className="seed-spline-block">
-            <h4>Export active</h4>
-            <p className="hint foil-export-hint">
-              B-spline LSQ match to samples (same idea as the NACA path). TE gap from sampling, not a forced symmetric
-              closure on cambered files.
-            </p>
-            <div className="seed-spline-actions seed-spline-actions-compact">
-              <button type="button" onClick={resetActiveToNaca}>
-                Reset to 0012
-              </button>
-              <button type="button" onClick={() => void copyDat()}>
-                Copy .dat
-              </button>
-              <button type="button" onClick={downloadDat}>
-                Download
-              </button>
             </div>
           </div>
-        </aside>
+        </div>
       </div>
     </section>
   )

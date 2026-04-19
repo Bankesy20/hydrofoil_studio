@@ -229,8 +229,8 @@ def _seed_cst_from_coords(
     seed_upper, seed_lower, seed_le, seed_te = airfoil_to_cst(coords, N_CST)
     if component_type == "mast":
         fixed_te = float(te_thickness or 0.0)
-        seed_lower = [-w for w in seed_upper]
-        seed_le = 0.0
+        # Keep the uploaded/edited lower surface for seed analysis polars.
+        # Mirroring lower from upper hides real upper/lower differences in Cp.
         seed_te = fixed_te
     return seed_upper, seed_lower, seed_le, seed_te
 

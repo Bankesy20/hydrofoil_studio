@@ -29,6 +29,7 @@ export type PeerVisual = {
 export interface AirfoilEditorProps {
   airfoil: Airfoil
   onChange: (next: Airfoil) => void
+  onEditCommit?: () => void
   zoom: number
   onZoomChange: (z: number) => void
   showReference: boolean
@@ -56,6 +57,7 @@ type Interaction =
 export function AirfoilEditor({
   airfoil,
   onChange,
+  onEditCommit,
   zoom,
   onZoomChange,
   showReference,
@@ -66,6 +68,7 @@ export function AirfoilEditor({
   const [interaction, setInteraction] = useState<Interaction>({ kind: 'idle' })
   const [size, setSize] = useState({ w: 1000, h: 400 })
   const [center, setCenter] = useState({ x: 0.5, y: 0 })
+  const dragChangedRef = useRef(false)
 
   const setSvgRef = useCallback((el: SVGSVGElement | null) => {
     svgRef.current = el
@@ -156,10 +159,12 @@ export function AirfoilEditor({
       if (kind === 'fixed') return
       if (ev.shiftKey && kind === 'free') {
         onChange(removeControlPoint(airfoil, surface, index))
+        onEditCommit?.()
         return
       }
       ev.stopPropagation()
       svgRef.current?.setPointerCapture(ev.pointerId)
+      dragChangedRef.current = false
       setInteraction({ kind: 'drag-cp', surface, index })
     }
 
@@ -187,6 +192,7 @@ export function AirfoilEditor({
     if (interaction.kind === 'drag-cp') {
       const x = fromScreenX(px)
       const y = fromScreenY(py)
+      dragChangedRef.current = true
       onChange(moveControlPoint(airfoil, interaction.surface, interaction.index, { x, y }))
     } else if (interaction.kind === 'pan') {
       const dxPx = px - interaction.startScreenX
@@ -200,12 +206,15 @@ export function AirfoilEditor({
 
   const endInteraction = (ev: ReactPointerEvent<SVGSVGElement>) => {
     if (interaction.kind === 'idle') return
+    const wasDragEdit = interaction.kind === 'drag-cp' && dragChangedRef.current
     try {
       svgRef.current?.releasePointerCapture?.(ev.pointerId)
     } catch {
       /* ignore */
     }
+    dragChangedRef.current = false
     setInteraction({ kind: 'idle' })
+    if (wasDragEdit) onEditCommit?.()
   }
 
   const onWheel = (ev: ReactWheelEvent<SVGSVGElement>) => {
@@ -234,6 +243,7 @@ export function AirfoilEditor({
 
   const onSegmentDoubleClick = (surface: Surface, segmentIndex: number) => () => {
     onChange(addControlPoint(airfoil, surface, segmentIndex + 1))
+    onEditCommit?.()
   }
 
   const panningCursor = interaction.kind === 'pan' ? 'grabbing' : 'grab'

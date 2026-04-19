@@ -51,7 +51,11 @@ type RowProps = {
   blues: readonly string[]
   onChange: (next: PolarChartSpec) => void
   onRemove: () => void
+  onMoveUp: () => void
+  onMoveDown: () => void
   canRemove: boolean
+  canMoveUp: boolean
+  canMoveDown: boolean
   /** Passed to `buildFlexPolarTraces` (default seed) */
   primaryLabel?: string
   /** Passed to `buildFlexPolarTraces` (default compare) */
@@ -68,7 +72,11 @@ export function PolarFlexChartRow({
   blues,
   onChange,
   onRemove,
+  onMoveUp,
+  onMoveDown,
   canRemove,
+  canMoveUp,
+  canMoveDown,
   primaryLabel,
   compareLabel,
 }: RowProps) {
@@ -162,6 +170,12 @@ export function PolarFlexChartRow({
           </label>
         )}
         <div className="polar-chart-actions">
+          <button type="button" className="ghost" disabled={!canMoveUp} onClick={onMoveUp} title="Move chart left/up">
+            ←
+          </button>
+          <button type="button" className="ghost" disabled={!canMoveDown} onClick={onMoveDown} title="Move chart right/down">
+            →
+          </button>
           <button type="button" className="ghost" disabled={!canRemove} onClick={onRemove} title="Remove chart">
             Remove
           </button>
@@ -175,7 +189,7 @@ export function PolarFlexChartRow({
             data={plotData}
             layout={layout}
             config={plotlyConfigHoverTools}
-            style={{ width: '100%', height: 440 }}
+            style={{ width: '100%', height: 340 }}
           />
         </div>
       )}
